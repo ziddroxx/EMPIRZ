@@ -43,7 +43,7 @@ end
 -- ================
 local DefaultConfig = {
     binds = {
-        PlaceStair = Enum.KeyCode.Q.Name,
+        PlaceStair = Enum.KeyCode.P.Name,
         PhantomToggle = Enum.KeyCode.F.Name,
         FloorHackToggle = Enum.KeyCode.R.Name
     },
