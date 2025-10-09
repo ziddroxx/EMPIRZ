@@ -80,7 +80,7 @@ local function keyFromName(name)
 end
 
 local keybinds = {
-    PlaceStair = keyFromName(Config.binds.PlaceStair) ~= Enum.KeyCode.Unknown and keyFromName(Config.binds.PlaceStair) or Enum.KeyCode.P,
+    PlaceStair = Enum.KeyCode.P,
     PhantomToggle = keyFromName(Config.binds.PhantomToggle) ~= Enum.KeyCode.Unknown and keyFromName(Config.binds.PhantomToggle) or Enum.KeyCode.E,
     FloorHackToggle = keyFromName(Config.binds.FloorHackToggle) ~= Enum.KeyCode.Unknown and keyFromName(Config.binds.FloorHackToggle) or Enum.KeyCode.R
 }
