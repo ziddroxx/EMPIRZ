@@ -1,170 +1,128 @@
--- AutoJoiner direct (WebSocket/HTTP fallback)
+-- AutoJoiner direct (WebSocket Only)
 -- By EMPIREUHQ
 
-repeat task.wait() until game:IsLoaded()
-
+-- Configuration
 local WebSocketURL = "ws://127.0.0.1:51948"
-local PollURL      = "http://127.0.0.1:51948/poll"
+local DefaultPlaceId = 109983668079237 -- ID de place en tant que NOMBRE
+
+-- Services
+local TeleportService = game:GetService("TeleportService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- --- Fonctions Utilitaires ---
 
 local function prints(str)
-    print("[AutoJoiner]: " .. tostring(str))
+	print("[AutoJoiner]: " .. tostring(str))
 end
 
--- rejoindre directement avec placeId + jobId
-local function joinJob(msg)
-    local s = tostring(msg)
+-- Tente de joindre la partie avec l'ID du serveur (jobId)
+local function joinJob(jobId)
+	if not jobId or jobId == "" then
+		prints("JobID manquant ou invalide.")
+		return
+	end
 
-    local placeId = s:match("[&?]placeID=(%d+)")
-    local jobId   = s:match("[&?]gameInstanceId=([%w%-]+)")
-
-    -- si on reçoit juste un jobId, utiliser ton placeId par défaut
-    if (not placeId or not jobId) and s:match("^%w[%w%-]+$") then
-        placeId = "109983668079237" -- ton jeu par défaut
-        jobId   = s
-    end
-
-    if not placeId or not jobId then
-        prints("Impossible d'extraire placeId / jobId depuis: " .. s)
-        return
-    end
-
-    prints("Teleporting to place " .. placeId .. " with jobId " .. jobId)
-
-    local TeleportService = game:GetService("TeleportService")
-    local Players = game:GetService("Players")
-
-    TeleportService:TeleportToPlaceInstance(placeId, jobId, Players.LocalPlayer)
+	prints("Teleporting to place " .. DefaultPlaceId .. " with jobId " .. jobId)
+	
+	-- Utilisation de la syntaxe la plus simple
+	TeleportService:TeleportToPlaceInstance(DefaultPlaceId, jobId)
 end
 
--- exécution directe d’un script reçu
-local function justJoin(script)
-    local func, err = loadstring(script)
-    if func then
-        local ok, result = pcall(func)
-        if not ok then
-            prints("Error while executing script: " .. tostring(result))
-        end
-    else
-        prints("Some unexpected error: " .. tostring(err))
-    end
-end
-
--- helper HTTP GET
-local function httpGet(url)
-    if syn and syn.request then
-        local ok, res = pcall(syn.request, {Url = url, Method = "GET"})
-        if ok and res and res.Body then return res.Body end
-    end
-    if typeof(http) == "table" and http.request then
-        local ok, res = pcall(http.request, {Url = url, Method = "GET"})
-        if ok and res and res.Body then return res.Body end
-    end
-    if type(http_request) == "function" then
-        local ok, res = pcall(http_request, {Url = url, Method = "GET"})
-        if ok and res and res.Body then return res.Body end
-    end
-    if type(request) == "function" then
-        local ok, res = pcall(request, {Url = url, Method = "GET"})
-        if ok and res and res.Body then return res.Body end
-    end
-    return nil
-end
-
--- tentative WebSocket multi-API
+-- Tente de trouver et connecter une API WebSocket disponible
 local function tryWebSocketConnect(url)
-    local connectFnCandidates = {
-        function() if syn and syn.websocket and syn.websocket.connect then return syn.websocket.connect end end,
-        function() if WebSocket and WebSocket.connect then return WebSocket.connect end end,
-        function() if xeno and xeno.websocket and xeno.websocket.connect then return xeno.websocket.connect end end,
-        function() if websocket and websocket.connect then return websocket.connect end end,
-    }
+	local connectFnCandidates = {
+		function() return syn and syn.websocket and syn.websocket.connect end,
+		function() return WebSocket and WebSocket.connect end,
+		function() return websocket and websocket.connect end,
+	}
 
-    for _, cand in ipairs(connectFnCandidates) do
-        local ok, connectFn = pcall(cand)
-        if ok and type(connectFn) == "function" then
-            local suc, socket = pcall(connectFn, url)
-            if suc and socket then
-                prints("WebSocket connected via detected API")
-                return socket
-            end
-        end
-    end
-    return nil
+	for _, getFn in ipairs(connectFnCandidates) do
+		local success, connectFn = pcall(getFn)
+		if success and type(connectFn) == "function" then
+			local suc, socket = pcall(connectFn, url)
+			if suc and socket then
+				prints("WebSocket connected via detected API")
+				return socket
+			end
+		end
+	end
+	return nil
 end
 
--- main connect
-local function connect()
-    prints("Starting connect procedure...")
+-- Handler de message principal
+local function messageHandler(data)
+	local msg = tostring(data)
+	
+	-- Retire le préfixe "connect:"
+	if msg:match("^connect:") then
+		local jobId = msg:sub(msg:find(":") + 1)
+		
+		if jobId:match("^[%w%-]+$") then
+			joinJob(jobId)
+			return
+		end
+	end
 
-    local ws = tryWebSocketConnect(WebSocketURL)
-    if ws then
-        if ws.OnMessage and type(ws.OnMessage.Connect) == "function" then
-            ws.OnMessage:Connect(function(msg)
-                local data = tostring(msg)
-                if data:find("TeleportService") or data:find("function") or data:find("game:") then
-                    prints("Received script payload -> executing")
-                    justJoin(data)
-                else
-                    prints("Received join URL/ID -> joining job")
-                    joinJob(data)
-                end
-            end)
-        else
-            task.spawn(function()
-                while true do
-                    local ok, data = pcall(function() return ws:Receive() end)
-                    if ok and data then
-                        local s = tostring(data)
-                        if s:find("TeleportService") or s:find("function") or s:find("game:") then
-                            prints("Received script payload -> executing")
-                            justJoin(s)
-                        else
-                            prints("Received join URL/ID -> joining job")
-                            joinJob(s)
-                        end
-                    else
-                        task.wait(0.5)
-                    end
-                end
-            end)
-        end
-
-        if ws.OnClose and type(ws.OnClose.Connect) == "function" then
-            ws.OnClose:Connect(function()
-                prints("WebSocket closed, reconnecting...")
-                task.wait(1)
-                connect()
-            end)
-        end
-
-        prints("Connected to WebSocket")
-        return
-    end
-
-    -- HTTP fallback
-    prints("WebSocket unavailable — trying HTTP polling fallback.")
-    local test = httpGet(PollURL)
-    if not test then
-        prints("Aucun mécanisme WebSocket/HTTP disponible dans ton executor.")
-        return
-    end
-
-    prints("HTTP fallback actif — polling " .. PollURL)
-    while true do
-        local body = httpGet(PollURL)
-        if body and body ~= "" then
-            local s = tostring(body)
-            if s:find("TeleportService") or s:find("function") or s:find("game:") then
-                prints("Received script payload (via HTTP) -> executing")
-                justJoin(s)
-            else
-                prints("Received join URL/ID (via HTTP) -> joining job")
-                joinJob(s)
-            end
-        end
-        task.wait(1)
-    end
+	-- Exécution de script (si ce n'est pas une commande de connexion)
+	if msg:find("TeleportService") or msg:find("function") or msg:find("game:") then
+		prints("Received raw script payload -> executing (NOT RECOMMENDED)")
+		local func, err = loadstring(msg)
+		if func then
+			local ok, result = pcall(func)
+			if not ok then
+				prints("Error while executing script: " .. tostring(result))
+			end
+		end
+	else
+		prints("Received UNKNOWN message: " .. msg)
+	end
 end
 
--- start
-connect()
+-- --- Démarrage principal ---
+
+local function connectMain()
+	prints("Starting connect procedure...")
+	repeat task.wait() until game:IsLoaded()
+
+	local ws = tryWebSocketConnect(WebSocketURL)
+	
+	if not ws then
+		prints("FATAL: WebSocket API not found or connection failed. Check executor support.")
+		return
+	end
+
+	-- Gestion des messages entrants (méthode événementielle)
+	if ws.OnMessage and type(ws.OnMessage.Connect) == "function" then
+		ws.OnMessage:Connect(messageHandler)
+		prints("Connected to WebSocket (Event-based)")
+
+	-- Gestion des messages entrants (méthode de boucle manuelle)
+	else
+		task.spawn(function()
+			prints("Connected to WebSocket (Manual loop)")
+			while true do
+				local ok, data = pcall(function() return ws:Receive() end)
+				if ok and data then
+					messageHandler(data)
+				end
+				task.wait(0.1)
+			end
+		end)
+	end
+
+	-- Gestion de la déconnexion
+	if ws.OnClose and type(ws.OnClose.Connect) == "function" then
+		ws.OnClose:Connect(function()
+			prints("WebSocket closed, restarting...")
+			task.wait(3)
+			connectMain()
+		end)
+	end
+end
+
+-- Point d'entrée pour la robustesse
+local success, errorMessage = pcall(connectMain)
+if not success then
+	prints("CRITICAL ERROR during execution: " .. tostring(errorMessage))
+end
